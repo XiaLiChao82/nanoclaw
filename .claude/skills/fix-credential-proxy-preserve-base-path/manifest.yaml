@@ -1,0 +1,11 @@
+skill: fix-credential-proxy-preserve-base-path
+version: 1.0.0
+description: "Fix credential proxy to preserve base URL path prefix for providers like MiniMax"
+core_version: 0.1.0
+adds: []
+modifies:
+  - src/credential-proxy.ts
+structured: {}
+conflicts: []
+depends: []
+test: "npx vitest run src/credential-proxy.test.ts"
