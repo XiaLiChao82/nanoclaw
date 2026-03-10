@@ -1,32 +1,7 @@
-# Intent: Add Feishu Channel Import
+# Intent: Add Feishu channel import
 
-## What changes
+Add `import './feishu.js';` to the channel barrel file so the Feishu
+module self-registers with the channel registry on startup.
 
-Add `import './feishu.js'` to the channel barrel file.
-
-## Where
-
-At the end of `src/channels/index.ts`, after other channel imports.
-
-## Invariants
-
-- Import order doesn't matter (channels self-register)
-- Must use `.js` extension for ESM compatibility
-- No other changes to this file
-
-## Example
-
-Before:
-```typescript
-import './whatsapp.js';
-import './telegram.js';
-import './slack.js';
-```
-
-After:
-```typescript
-import './whatsapp.js';
-import './telegram.js';
-import './slack.js';
-import './feishu.js';
-```
+This is an append-only change — existing import lines for other channels
+must be preserved.

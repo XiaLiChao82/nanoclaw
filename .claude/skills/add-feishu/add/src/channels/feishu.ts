@@ -11,16 +11,12 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
-export interface FeishuChannelOpts {
-  onMessage: OnInboundMessage;
-  onChatMetadata: OnChatMetadata;
-  registeredGroups: () => Record<string, RegisteredGroup>;
-}
-
 // Use SDK's inferred event types
 type MessageReceiveEvent = Parameters<
   NonNullable<
-    Parameters<typeof lark.EventDispatcher.prototype.register>[0]['im.message.receive_v1']
+    Parameters<
+      typeof lark.EventDispatcher.prototype.register
+    >[0]['im.message.receive_v1']
   >
 >[0];
 
@@ -29,7 +25,7 @@ export class FeishuChannel implements Channel {
 
   private client: lark.Client | null = null;
   private wsClient: lark.WSClient | null = null;
-  private opts: FeishuChannelOpts;
+  private opts: ChannelOpts;
   private appId: string;
   private appSecret: string;
   private encryptKey: string;
@@ -39,7 +35,7 @@ export class FeishuChannel implements Channel {
     appId: string,
     appSecret: string,
     encryptKey: string,
-    opts: FeishuChannelOpts,
+    opts: ChannelOpts,
   ) {
     this.appId = appId;
     this.appSecret = appSecret;
@@ -75,7 +71,9 @@ export class FeishuChannel implements Channel {
 
       logger.info({ appId: this.appId }, 'Feishu WebSocket connected');
       console.log(`\n  Feishu bot connected (App ID: ${this.appId})`);
-      console.log(`  Add bot to a chat and send a message to get the chat ID\n`);
+      console.log(
+        `  Add bot to a chat and send a message to get the chat ID\n`,
+      );
     } catch (err) {
       logger.error({ err }, 'Failed to connect Feishu WebSocket');
       throw err;
@@ -91,8 +89,11 @@ export class FeishuChannel implements Channel {
     }
 
     const chatJid = `feishu:${message.chat_id}`;
-    const timestamp = new Date(parseInt(message.create_time) * 1000).toISOString();
-    const senderId = sender.sender_id?.open_id || sender.sender_id?.user_id || '';
+    const timestamp = new Date(
+      parseInt(message.create_time) * 1000,
+    ).toISOString();
+    const senderId =
+      sender.sender_id?.open_id || sender.sender_id?.user_id || '';
     const msgId = message.message_id;
     const msgType = message.message_type;
 
@@ -132,6 +133,17 @@ export class FeishuChannel implements Channel {
       content = `[${msgType}]`;
     }
 
+    // Handle @ mentions: replace placeholder (e.g., @_user_1) with @ASSISTANT_NAME
+    // This allows trigger pattern to match regardless of bot's display name in Feishu
+    if (message.mentions && Array.isArray(message.mentions)) {
+      for (const mention of message.mentions) {
+        if (mention.key && mention.name) {
+          // Replace the placeholder with @ASSISTANT_NAME for bot mentions
+          content = content.replace(mention.key, `@${ASSISTANT_NAME}`);
+        }
+      }
+    }
+
     // Get sender name (Feishu doesn't provide it directly in message event)
     // We'll use the sender ID as a fallback
     const senderName = senderId || 'Unknown';
@@ -139,13 +151,30 @@ export class FeishuChannel implements Channel {
     // Store chat metadata for discovery
     this.opts.onChatMetadata(chatJid, timestamp, undefined, 'feishu', true);
 
-    // Only deliver full message for registered groups
-    const group = this.opts.registeredGroups()[chatJid];
-    if (!group) {
-      logger.debug(
-        { chatJid },
-        'Message from unregistered Feishu chat',
+    // Check if bot is mentioned in the message
+    const botMentioned =
+      message.mentions &&
+      Array.isArray(message.mentions) &&
+      message.mentions.some(
+        (m: any) => m.name === 'NanoClaw助手' || m.key?.includes('_user_'),
       );
+
+    // Auto-register group if bot is mentioned
+    let group = this.opts.registeredGroups()[chatJid];
+    if (!group && botMentioned) {
+      logger.info({ chatJid }, 'Auto-registering Feishu group (bot mentioned)');
+      this.opts.onAutoRegister?.(chatJid, {
+        name: message.chat_id,
+        channel: 'feishu',
+        isGroup: true,
+      });
+      // Re-fetch group after auto-registration
+      group = this.opts.registeredGroups()[chatJid];
+    }
+
+    // Only deliver full message for registered groups
+    if (!group) {
+      logger.debug({ chatJid }, 'Message from unregistered Feishu chat');
       return;
     }
 
@@ -184,6 +213,16 @@ export class FeishuChannel implements Channel {
       return elements
         .map((el: any) => {
           if (typeof el === 'string') return el;
+          // For @ mentions, normalize to ASSISTANT_NAME for bot mentions
+          // Feishu bot name might differ from configured ASSISTANT_NAME
+          if (el.tag === 'at') {
+            // If user_id is not 'all' (which means @everyone), treat as bot mention
+            // and normalize to ASSISTANT_NAME for trigger pattern matching
+            if (el.user_id !== 'all') {
+              return `@${ASSISTANT_NAME}`;
+            }
+            return `@${el.text || ''}`;
+          }
           if (el.text) return el.text;
           if (el.children) return extractText(el.children);
           return '';
@@ -231,7 +270,10 @@ export class FeishuChannel implements Channel {
         });
       }
 
-      logger.info({ jid, length: text.length, chunks: chunks.length }, 'Feishu message sent');
+      logger.info(
+        { jid, length: text.length, chunks: chunks.length },
+        'Feishu message sent',
+      );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Feishu message');
     }
@@ -292,9 +334,12 @@ export class FeishuChannel implements Channel {
 }
 
 registerChannel('feishu', (opts: ChannelOpts) => {
-  const envVars = readEnvFile(['FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_ENCRYPT_KEY']);
-  const appId =
-    process.env.FEISHU_APP_ID || envVars.FEISHU_APP_ID || '';
+  const envVars = readEnvFile([
+    'FEISHU_APP_ID',
+    'FEISHU_APP_SECRET',
+    'FEISHU_ENCRYPT_KEY',
+  ]);
+  const appId = process.env.FEISHU_APP_ID || envVars.FEISHU_APP_ID || '';
   const appSecret =
     process.env.FEISHU_APP_SECRET || envVars.FEISHU_APP_SECRET || '';
   const encryptKey =

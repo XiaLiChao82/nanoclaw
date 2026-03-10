@@ -7,6 +7,8 @@ adds:
   - src/channels/feishu.test.ts
 modifies:
   - src/channels/index.ts
+  - src/channels/registry.ts
+  - src/index.ts
 structured:
   npm_dependencies:
     "@larksuiteoapi/node-sdk": "^1.59.0"
