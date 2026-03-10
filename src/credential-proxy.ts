@@ -44,6 +44,9 @@ export function startCredentialProxy(
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
+  // Preserve path prefix from base URL (e.g., /anthropic for MiniMax)
+  const basePath = upstreamUrl.pathname.replace(/\/$/, '');
+
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -79,11 +82,13 @@ export function startCredentialProxy(
           }
         }
 
+        const upstreamPath = basePath + req.url;
+
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
             port: upstreamUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
+            path: upstreamPath,
             method: req.method,
             headers,
           } as RequestOptions,
