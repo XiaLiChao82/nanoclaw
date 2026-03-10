@@ -80,6 +80,7 @@ function createTestOpts(overrides?: Partial<any>): any {
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
     registeredGroups: vi.fn(() => ({})),
+    onAutoRegister: vi.fn(),
     ...overrides,
   };
 }
@@ -126,12 +127,16 @@ describe('FeishuChannel', () => {
       await channel.connect();
 
       expect(eventDispatcherRef.current).not.toBeNull();
-      expect(eventDispatcherRef.current.handlers.has('im.message.receive_v1')).toBe(true);
+      expect(
+        eventDispatcherRef.current.handlers.has('im.message.receive_v1'),
+      ).toBe(true);
     });
 
     it('should throw on connection failure', async () => {
       wsClientRef.current = null;
-      const startMock = vi.fn().mockRejectedValue(new Error('Connection failed'));
+      const startMock = vi
+        .fn()
+        .mockRejectedValue(new Error('Connection failed'));
 
       await channel.connect();
 
@@ -169,17 +174,14 @@ describe('FeishuChannel', () => {
         })),
       });
 
-      channel = new FeishuChannel(
-        'test-app-id',
-        'test-app-secret',
-        '',
-        opts,
-      );
+      channel = new FeishuChannel('test-app-id', 'test-app-secret', '', opts);
 
       await channel.connect();
 
       // Get the registered message handler
-      messageHandler = eventDispatcherRef.current.handlers.get('im.message.receive_v1');
+      messageHandler = eventDispatcherRef.current.handlers.get(
+        'im.message.receive_v1',
+      );
     });
 
     it('should handle text message', async () => {
@@ -253,6 +255,86 @@ describe('FeishuChannel', () => {
       expect(opts.onMessage).not.toHaveBeenCalled();
     });
 
+    it('should auto-register group when bot is mentioned', async () => {
+      const eventData = {
+        message: {
+          message_id: 'msg-123',
+          chat_id: 'new-chat-id',
+          content: JSON.stringify({ text: '@_user_1 hello' }),
+          message_type: 'text',
+          create_time: '1700000000',
+          mentions: [
+            {
+              key: '@_user_1',
+              name: 'NanoClaw助手',
+            },
+          ],
+        },
+        sender: {
+          sender_id: { open_id: 'user-123' },
+          sender_type: 'user',
+          tenant_key: 'tenant-123',
+        },
+      };
+
+      // Initially no registered groups
+      opts.registeredGroups = vi.fn(() => ({}));
+
+      // After auto-register, return the new group
+      opts.onAutoRegister = vi.fn((chatJid, meta) => {
+        opts.registeredGroups = vi.fn(() => ({
+          'feishu:new-chat-id': {
+            name: 'new-chat-id',
+            channel: 'feishu',
+            requiresTrigger: false,
+          },
+        }));
+      });
+
+      await messageHandler(eventData);
+
+      expect(opts.onAutoRegister).toHaveBeenCalledWith(
+        'feishu:new-chat-id',
+        expect.objectContaining({
+          name: 'new-chat-id',
+          channel: 'feishu',
+          isGroup: true,
+        }),
+      );
+    });
+
+    it('should replace @ mention placeholder with @ASSISTANT_NAME', async () => {
+      const eventData = {
+        message: {
+          message_id: 'msg-123',
+          chat_id: 'test-chat-id',
+          content: JSON.stringify({ text: '@_user_1 please help' }),
+          message_type: 'text',
+          create_time: '1700000000',
+          mentions: [
+            {
+              key: '@_user_1',
+              name: 'NanoClaw助手',
+            },
+          ],
+        },
+        sender: {
+          sender_id: { open_id: 'user-123' },
+          sender_type: 'user',
+          tenant_key: 'tenant-123',
+        },
+      };
+
+      await messageHandler(eventData);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'feishu:test-chat-id',
+        expect.objectContaining({
+          content: '@Andy please help',
+        }),
+      );
+    });
+
     it('should handle image message', async () => {
       const eventData = {
         message: {
@@ -284,7 +366,10 @@ describe('FeishuChannel', () => {
         message: {
           message_id: 'msg-123',
           chat_id: 'test-chat-id',
-          content: JSON.stringify({ file_key: 'file-key', file_name: 'doc.pdf' }),
+          content: JSON.stringify({
+            file_key: 'file-key',
+            file_name: 'doc.pdf',
+          }),
           message_type: 'file',
           create_time: '1700000000',
         },
@@ -330,6 +415,45 @@ describe('FeishuChannel', () => {
         }),
       );
     });
+
+    it('should handle post message with @ mention', async () => {
+      const eventData = {
+        message: {
+          message_id: 'msg-123',
+          chat_id: 'test-chat-id',
+          content: JSON.stringify({
+            title: 'Test',
+            content: [
+              {
+                paragraph: {
+                  elements: [
+                    { text: 'Hello ' },
+                    { tag: 'at', user_id: 'ou_bot', text: 'Bot' },
+                    { text: '!' },
+                  ],
+                },
+              },
+            ],
+          }),
+          message_type: 'post',
+          create_time: '1700000000',
+        },
+        sender: {
+          sender_id: { open_id: 'user-123' },
+          sender_type: 'user',
+          tenant_key: 'tenant-123',
+        },
+      };
+
+      await messageHandler(eventData);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'feishu:test-chat-id',
+        expect.objectContaining({
+          content: 'Hello @Andy!',
+        }),
+      );
+    });
   });
 
   describe('sendMessage', () => {
@@ -345,7 +469,7 @@ describe('FeishuChannel', () => {
         data: {
           receive_id: 'test-chat-id',
           content: JSON.stringify({ text: 'Hello World' }),
-          msg_type: 'text',  // Note: send API uses msg_type
+          msg_type: 'text', // Note: send API uses msg_type
         },
       });
     });
@@ -356,7 +480,9 @@ describe('FeishuChannel', () => {
       await channel.sendMessage('feishu:test-chat-id', longText);
 
       // Should be called at least twice due to splitting
-      expect(clientRef.current.im.message.create.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        clientRef.current.im.message.create.mock.calls.length,
+      ).toBeGreaterThanOrEqual(2);
     });
 
     it('should extract chat ID from JID', async () => {
@@ -372,7 +498,9 @@ describe('FeishuChannel', () => {
     });
 
     it('should handle send error gracefully', async () => {
-      clientRef.current.im.message.create.mockRejectedValue(new Error('Send failed'));
+      clientRef.current.im.message.create.mockRejectedValue(
+        new Error('Send failed'),
+      );
 
       // Should not throw
       await expect(

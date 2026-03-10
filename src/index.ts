@@ -517,6 +517,22 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onAutoRegister: (
+      chatJid: string,
+      meta: { name?: string; channel: string; isGroup: boolean },
+    ) => {
+      logger.info({ chatJid, meta }, 'Auto-registering group');
+      const folder = chatJid
+        .replace(/^[^:]+:/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_');
+      registerGroup(chatJid, {
+        name: meta.name || folder,
+        folder,
+        trigger: `^@${ASSISTANT_NAME}\\b`,
+        added_at: new Date().toISOString(),
+        requiresTrigger: true,
+      });
+    },
   };
 
   // Create and connect all registered channels.
